@@ -1,9 +1,9 @@
-use poise::ChoiceParameter;
+use poise::{ChoiceParameter, SlashArgument};
 use poise::serenity_prelude::*;
 
 use crate::{ApplicationContext, Context, Error};
 use crate::event_handler::CUSTOM_ID_PREFIX;
-use crate::state::{AddFieldError, SerializableMention, State};
+use crate::state::{AddFieldError, FormId, SerializableMention, State};
 
 /// Manage forms in the server
 #[poise::command(
@@ -24,7 +24,7 @@ async fn rename(
     #[description = "The form to modify"]
     #[rename = "form"]
     #[autocomplete = "autocomplete_form"]
-    form_id: usize,
+    form_id: FormId,
     #[description = "New title for the form"] title: String,
 ) -> Result<(), Error> {
     ctx.defer_ephemeral().await?;
@@ -47,7 +47,7 @@ async fn mention(
     #[description = "The form to modify"]
     #[rename = "form"]
     #[autocomplete = "autocomplete_form"]
-    form_id: usize,
+    form_id: FormId,
     #[description = "New role/user to be mentioned on submission (leave it out to remove)"]
     mention: Option<SerializableMention>,
 ) -> Result<(), Error> {
@@ -69,7 +69,7 @@ async fn destination(
     #[description = "The form to modify"]
     #[rename = "form"]
     #[autocomplete = "autocomplete_form"]
-    form_id: usize,
+    form_id: FormId,
     #[description = "The new channel to create the thread under"]
     #[channel_types("Text")]
     destination: GuildChannel,
@@ -80,6 +80,7 @@ async fn destination(
     };
 
     form.destination = destination.into();
+    ctx.data.save_form(form_id, form).await;
     ctx.say("Form destination was updated").await?;
     Ok(())
 }
@@ -108,8 +109,9 @@ impl From<ButtonColor> for ButtonStyle {
 async fn button(
     ctx: ApplicationContext<'_>,
     #[description = "The form to delete"]
+    #[rename = "form"]
     #[autocomplete = "autocomplete_form"]
-    form: usize,
+    form_id: FormId,
     #[description = "Text for the button"] text: String,
     #[description = "A string to send with the button"] message: Option<String>,
     #[description = "The color of the button"] color: ButtonColor,
@@ -117,7 +119,7 @@ async fn button(
 ) -> Result<(), Error> {
     ctx.defer_ephemeral().await?;
 
-    let mut button = CreateButton::new(format!("{CUSTOM_ID_PREFIX}{form}"))
+    let mut button = CreateButton::new(format!("{CUSTOM_ID_PREFIX}{form_id}"))
         .label(text)
         .style(color.into());
 
@@ -149,12 +151,11 @@ async fn button(
 async fn show_form(
     ctx: ApplicationContext<'_>,
     #[description = "The form to delete"]
+    #[rename = "form"]
     #[autocomplete = "autocomplete_form"]
-    form: usize,
+    form_id: FormId,
 ) -> Result<(), Error> {
-    // TODO ensure we do not create forms with zero components
-
-    let Some(form) = ctx.data.get_form(form).await else {
+    let Some(form) = ctx.data.get_form(form_id).await else {
         ctx.say("Unknown form").await?;
         return Ok(());
     };
@@ -201,7 +202,7 @@ async fn add_field(
     #[description = "The form to consider"]
     #[rename = "form"]
     #[autocomplete = "autocomplete_form"]
-    form_id: usize,
+    form_id: FormId,
     #[description = "The name of the field"] name: String,
     #[description = "The style of the field"] style: FieldStyle,
     #[description = "Placeholder text for the field"] placeholder: Option<String>,
@@ -239,15 +240,15 @@ async fn add_field(
     Ok(())
 }
 
-fn find_parameter(opts: &[CommandDataOption], name: &str) -> Option<usize> {
+fn find_resolved_value<'a>(ctx: ApplicationContext, opts: &'a [ResolvedOption], name: &str) -> Option<&'a ResolvedValue<'a>> {
     for opt in opts {
         match &opt.value {
-            CommandDataOptionValue::SubCommand(opts)
-            | CommandDataOptionValue::SubCommandGroup(opts) => {
-                return find_parameter(opts, name);
+            ResolvedValue::SubCommand(opts)
+            | ResolvedValue::SubCommandGroup(opts) => {
+                return find_resolved_value(ctx, opts, name);
             }
-            CommandDataOptionValue::Integer(value) if opt.name == name => {
-                return Some(*value as usize);
+            v if opt.name == name => {
+                return Some(v);
             }
             _ => {}
         }
@@ -255,13 +256,19 @@ fn find_parameter(opts: &[CommandDataOption], name: &str) -> Option<usize> {
     None
 }
 
+async fn find_value<T: SlashArgument>(ctx: ApplicationContext<'_>, name: &str) -> Option<T> {
+    let options = ctx.interaction.data.options();
+    let value = find_resolved_value(ctx, &options, name)?;
+    SlashArgument::extract(ctx.serenity_context, ctx.interaction, value).await.ok()
+}
+
 async fn autocomplete_field(
     ctx: ApplicationContext<'_>,
     _partial: &str,
 ) -> Vec<AutocompleteChoice> {
-    if let Some(form_id) = find_parameter(&ctx.interaction.data.options, "form") {
+    if let Some(form_id) = find_value(ctx, "form").await {
         if let Some(fields) = ctx.data.get_fields(form_id).await {
-            fields.into_iter().map(|(i, name)| AutocompleteChoice::new(name, i)).collect()
+            fields.into_iter().enumerate().map(|(i, f)| AutocompleteChoice::new(f.name, i)).collect()
         } else {
             vec![]
         }
@@ -277,7 +284,7 @@ async fn remove_field(
     #[description = "The form to consider"]
     #[rename = "form"]
     #[autocomplete = "autocomplete_form"]
-    form_id: usize,
+    form_id: FormId,
     #[description = "The field to remove"]
     #[autocomplete = "autocomplete_field"]
     field: usize,
@@ -288,7 +295,7 @@ async fn remove_field(
     };
 
     if form.remove_field(field) {
-        ctx.say("A-okay, buddy!").await?;
+        ctx.say("Field was removed").await?;
         ctx.data.save_form(form_id, form).await;
     } else {
         ctx.say("Unknown field").await?;
@@ -319,7 +326,7 @@ async fn autocomplete_form(
     ctx: ApplicationContext<'_>,
     _partial: &str,
 ) -> Vec<AutocompleteChoice> {
-    ctx.data.get_forms().await.into_iter().map(|(i, name)| AutocompleteChoice::new(name, i)).collect()
+    ctx.data.get_form_ids().await.into_iter().map(|(id, name)| AutocompleteChoice::new(name, id.to_string())).collect()
 }
 
 /// Deletes a form
@@ -327,11 +334,12 @@ async fn autocomplete_form(
 async fn delete_form(
     ctx: ApplicationContext<'_>,
     #[description = "The form to delete"]
+    #[rename = "form"]
     #[autocomplete = "autocomplete_form"]
-    form: usize,
+    form_id: FormId,
 ) -> Result<(), Error> {
-    if ctx.data.delete_form(form).await {
-        ctx.say("A-okay, buddy!").await?;
+    if ctx.data.delete_form(form_id).await {
+        ctx.say("Form was deleted").await?;
     } else {
         ctx.say("Unknown form").await?;
     }

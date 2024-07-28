@@ -11,7 +11,7 @@ pub async fn event_handler(ctx: &Context, event: &FullEvent, framework: Framewor
             return Ok(());
         }
 
-        let form_id = custom_id[CUSTOM_ID_PREFIX.len()..].parse::<usize>()?;
+        let form_id = custom_id[CUSTOM_ID_PREFIX.len()..].parse()?;
         let Some(form) = framework.user_data.get_form(form_id).await else {
             interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new().ephemeral(true).content("This form no longer exists"))).await?;
             return Ok(());
