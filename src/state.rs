@@ -36,6 +36,7 @@ impl poise::SlashArgument for FormId {
             ResolvedValue::String(str) => str,
             _ => return Err(SlashArgError::new_command_structure_mismatch("expected string")),
         };
+        // TODO turn this to invalid if it becomes available
         value.parse().map_err(|_| SlashArgError::new_command_structure_mismatch("expected uuid"))
     }
 
@@ -163,12 +164,15 @@ impl FormField {
 
     fn input_text<T: Into<String>>(&self, custom_id: T) -> CreateInputText {
         let mut builder = CreateInputText::new(self.style, &self.name, custom_id)
-            .min_length(self.min_length.unwrap_or(FIELD_RESPONSE_MAX_LENGTH))
             .max_length(self.min_length.unwrap_or(FIELD_RESPONSE_MAX_LENGTH))
             .required(self.required);
 
         if let Some(placeholder) = &self.placeholder {
             builder = builder.placeholder(placeholder);
+        }
+
+        if let Some(min_length) = self.min_length {
+            builder = builder.min_length(min_length);
         }
 
         builder
@@ -231,14 +235,14 @@ impl Display for ValueTooLong {
 impl std::error::Error for ValueTooLong {}
 
 impl Form {
-    pub fn new(title: String, destination: ChannelId) -> Result<Self, ValueTooLong> {
+    pub fn new<C: Into<ChannelId>>(title: String, destination: C) -> Result<Self, ValueTooLong> {
         Self::validate_title(&title)?;
         Ok(Self {
             id: FormId(Uuid::new_v4()),
             title,
             description: None,
             fields: vec![],
-            destination,
+            destination: destination.into(),
             mention: None,
         })
     }

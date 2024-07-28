@@ -20,7 +20,6 @@ pub async fn create_response(ctx: &Context, form: &Form, response: QuickModalRes
         .invitable(false);
     let thread = form.destination.create_thread(ctx, create_thread).await?;
 
-
     let mut embed_builder = CreateEmbed::new()
         .title(form.title())
         .timestamp(Timestamp::now())
@@ -29,14 +28,20 @@ pub async fn create_response(ctx: &Context, form: &Form, response: QuickModalRes
     embed_builder = form.fields().iter().zip(response.inputs.into_iter())
         .fold(embed_builder, |acc, (field, value)| field.apply_to_embed(acc, value));
 
+    let mut content = None;
+
+    if let Some(mentionable) = form.mention {
+        content = Some(mentionable.to_string() + "\n");
+    }
+
     if let Some(description) = form.description() {
-        embed_builder = embed_builder.description(description);
+        *content.get_or_insert_with(|| String::new()) += description;
     }
 
     let mut message_builder = CreateMessage::new().embed(embed_builder);
 
-    if let Some(mentionable) = form.mention {
-        message_builder = message_builder.content(mentionable.to_string());
+    if let Some(content) = content {
+        message_builder = message_builder.content(content.trim_end());
     }
 
     thread.send_message(ctx, message_builder).await?;

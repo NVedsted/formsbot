@@ -1,5 +1,5 @@
 #![allow(clippy::too_many_arguments)]
-use poise::{ChoiceParameter, SlashArgument};
+use poise::{ChoiceParameter, CreateReply, SlashArgument};
 use poise::serenity_prelude::*;
 
 use crate::{ApplicationContext, Context, Error};
@@ -13,7 +13,7 @@ use crate::state::{AddFieldError, Form, FormField, FormId, SerializableMention, 
     slash_command,
     guild_only,
     ephemeral,
-    subcommands("create_form", "delete_form", "button", "fields", "destination", "rename", "mention", "show_form"
+    subcommands("create_form", "delete_form", "button", "fields", "destination", "rename", "mention", "show_form", "form_details", "description"
     )
 )]
 async fn form(_ctx: Context<'_>) -> Result<(), Error> {
@@ -44,6 +44,26 @@ async fn rename(
     Ok(())
 }
 
+/// Changes the description of a form
+#[poise::command(slash_command, ephemeral)]
+async fn description(
+    ctx: ApplicationContext<'_>,
+    #[description = "The form to modify"]
+    #[rename = "form"]
+    #[autocomplete = "autocomplete_form"]
+    form_id: FormId,
+    #[description = "The new text to be shown shown in top of responses (leave it out to clear)"]
+    #[max_length = 4096]
+    description: Option<String>,
+) -> Result<(), Error> {
+    ctx.defer_ephemeral().await?;
+    let mut form = get_form(ctx, form_id).await?;
+    form.set_description(description)?;
+    ctx.data.save_form(ctx.guild_id().unwrap(), &form).await?;
+    ctx.say("Form description was changed").await?;
+    Ok(())
+}
+
 /// Changes who is mentioned on submission of the form
 #[poise::command(slash_command, ephemeral)]
 async fn mention(
@@ -58,8 +78,17 @@ async fn mention(
     ctx.defer_ephemeral().await?;
     let mut form = get_form(ctx, form_id).await?;
     form.mention = mention;
+    ctx.data.save_form(ctx.guild_id().unwrap(), &form).await?;
     ctx.say("Mention of the form was changed").await?;
     Ok(())
+}
+
+fn validate_destination(ctx: ApplicationContext<'_>, destination: &GuildChannel) -> Result<(), Error> {
+    if destination.permissions_for_user(ctx, ctx.framework.bot_id)?.create_private_threads() {
+        Ok(())
+    } else {
+        Err(UserFriendlyError::new(format!("I do not have permission to create private threads in {}", destination)).into())
+    }
 }
 
 /// Changes the destination channel of a form
@@ -72,10 +101,13 @@ async fn destination(
     form_id: FormId,
     #[description = "The new channel to create the thread under"]
     #[channel_types("Text")]
-    destination: ChannelId,
+    destination: GuildChannel,
 ) -> Result<(), Error> {
     let mut form = get_form(ctx, form_id).await?;
-    form.destination = destination;
+
+    validate_destination(ctx, &destination)?;
+
+    form.destination = destination.id;
     ctx.data.save_form(ctx.guild_id().unwrap(), &form).await?;
     ctx.say("Form destination was updated").await?;
     Ok(())
@@ -170,6 +202,55 @@ async fn show_form(
     } else {
         response.interaction.create_response(ctx, CreateInteractionResponse::Acknowledge).await?;
     }
+
+    Ok(())
+}
+
+/// Shows the details of a form
+#[poise::command(slash_command, rename = "details", ephemeral)]
+async fn form_details(
+    ctx: ApplicationContext<'_>,
+    #[description = "The form to consider"]
+    #[rename = "form"]
+    #[autocomplete = "autocomplete_form"]
+    form_id: FormId,
+) -> Result<(), Error> {
+    ctx.defer_ephemeral().await?;
+    let form = get_form(ctx, form_id).await?;
+    let mut embed_builder = CreateEmbed::new()
+        .title(form.title());
+
+    fn style_list<const N: usize>(elements: [(&str, Option<String>); N]) -> String {
+        elements.into_iter().filter_map(|(name, value)| value.map(|v| (name, v)))
+            .map(|(name, v)| format!("- **{}**: {}", name, v))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn field_details(field: &FormField) -> String {
+        style_list([
+            ("Style", match field.style {
+                InputTextStyle::Short => Some("Short".to_owned()),
+                InputTextStyle::Paragraph => Some("Paragraph".to_owned()),
+                _ => None,
+            }),
+            ("Placeholder", field.placeholder().map(str::to_owned)),
+            ("Minimum length", field.min_length.map(|l| l.to_string())),
+            ("Max length", field.max_length.map(|l| l.to_string())),
+            ("Required", Some(field.required.to_string())),
+            ("In-line", Some(field.inline.to_string())),
+        ])
+    }
+
+    embed_builder = form.fields().iter()
+        .fold(embed_builder, |acc, f| acc.field(f.name(), field_details(f), true))
+        .description(style_list([
+            ("Destination", Some(form.destination.mention().to_string())),
+            ("Description", form.description().map(str::to_owned)),
+            ("Mentions", form.mention.map(|m| m.to_string())),
+        ]));
+
+    ctx.send(CreateReply::default().embed(embed_builder)).await?;
 
     Ok(())
 }
@@ -321,11 +402,14 @@ async fn create_form(
     description: Option<String>,
     #[description = "The channel to create the thread under"]
     #[channel_types("Text")]
-    destination: ChannelId,
-    #[description = "New role/user to be mentioned on submission (leave it out to remove)"]
+    destination: GuildChannel,
+    #[description = "New role/user to be mentioned on submission"]
     mention: Option<SerializableMention>,
 ) -> Result<(), Error> {
     ctx.defer_ephemeral().await?;
+
+    validate_destination(ctx, &destination)?;
+
     let mut form = Form::new(title, destination)?;
     form.mention = mention;
     form.set_description(description)?;
