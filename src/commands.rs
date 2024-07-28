@@ -3,7 +3,8 @@ use poise::serenity_prelude::*;
 
 use crate::{ApplicationContext, Context, Error};
 use crate::event_handler::CUSTOM_ID_PREFIX;
-use crate::state::{AddFieldError, FormId, SerializableMention, State};
+use crate::responses::create_response;
+use crate::state::{AddFieldError, Form, FormId, SerializableMention, State};
 
 /// Manage forms in the server
 #[poise::command(
@@ -25,7 +26,9 @@ async fn rename(
     #[rename = "form"]
     #[autocomplete = "autocomplete_form"]
     form_id: FormId,
-    #[description = "New title for the form"] title: String,
+    #[description = "New title for the form"]
+    #[max_length = 45]
+    title: String,
 ) -> Result<(), Error> {
     ctx.defer_ephemeral().await?;
     let Some(mut form) = ctx.data.get_form(form_id).await else {
@@ -33,9 +36,8 @@ async fn rename(
         return Ok(());
     };
 
-    form.title = title;
-
-    ctx.data.save_form(form_id, form).await;
+    form.set_title(title)?;
+    ctx.data.save_form(&form).await;
     ctx.say("Form was renamed").await?;
     Ok(())
 }
@@ -72,15 +74,15 @@ async fn destination(
     form_id: FormId,
     #[description = "The new channel to create the thread under"]
     #[channel_types("Text")]
-    destination: GuildChannel,
+    destination: ChannelId,
 ) -> Result<(), Error> {
     let Some(mut form) = ctx.data.get_form(form_id).await else {
         ctx.say("Unknown form").await?;
         return Ok(());
     };
 
-    form.destination = destination.into();
-    ctx.data.save_form(form_id, form).await;
+    form.destination = destination;
+    ctx.data.save_form(&form).await;
     ctx.say("Form destination was updated").await?;
     Ok(())
 }
@@ -112,7 +114,9 @@ async fn button(
     #[rename = "form"]
     #[autocomplete = "autocomplete_form"]
     form_id: FormId,
-    #[description = "Text for the button"] text: String,
+    #[description = "Text for the button"]
+    #[max_length = 80]
+    text: String,
     #[description = "A string to send with the button"] message: Option<String>,
     #[description = "The color of the button"] color: ButtonColor,
     #[description = "An emoji for the button"] emoji: Option<String>,
@@ -154,6 +158,8 @@ async fn show_form(
     #[rename = "form"]
     #[autocomplete = "autocomplete_form"]
     form_id: FormId,
+    #[description = "Whether submitting should create a response (defaults to false)"]
+    create: Option<bool>,
 ) -> Result<(), Error> {
     let Some(form) = ctx.data.get_form(form_id).await else {
         ctx.say("Unknown form").await?;
@@ -165,7 +171,13 @@ async fn show_form(
         return Ok(());
     };
 
-    if let Some(response) = ctx.interaction.quick_modal(ctx.serenity_context(), quick_modal).await? {
+    let Some(response) = ctx.interaction.quick_modal(ctx.serenity_context(), quick_modal).await? else {
+        return Ok(());
+    };
+
+    if let Some(true) = create {
+        create_response(ctx.serenity_context, &form, response).await?;
+    } else {
         response.interaction.create_response(ctx, CreateInteractionResponse::Acknowledge).await?;
     }
 
@@ -203,11 +215,20 @@ async fn add_field(
     #[rename = "form"]
     #[autocomplete = "autocomplete_form"]
     form_id: FormId,
-    #[description = "The name of the field"] name: String,
+    #[description = "The name of the field"]
+    #[max_length = 45]
+    name: String,
     #[description = "The style of the field"] style: FieldStyle,
-    #[description = "Placeholder text for the field"] placeholder: Option<String>,
-    #[description = "The minimum length of responses (always at least 1 if required)"] min_length: Option<u16>,
-    #[description = "The maximum length of responses"] max_length: Option<u16>,
+    #[description = "Placeholder text for the field"]
+    #[max_length = 100]
+    placeholder: Option<String>,
+    #[description = "The minimum length of responses (always at least 1 if required)"]
+    #[max = 1024]
+    min_length: Option<u16>,
+    #[description = "The maximum length of responses"]
+    #[min = 1]
+    #[max = 1024]
+    max_length: Option<u16>,
     #[description = "Whether the field is required (defaults to true)"] required: Option<bool>,
     #[description = "Whether to add this field before another existing field; otherwise, it is added to the bottom"]
     #[autocomplete = "autocomplete_field"]
@@ -230,7 +251,7 @@ async fn add_field(
         add_before,
     ) {
         Ok(_) => {
-            ctx.data.save_form(form_id, form).await;
+            ctx.data.save_form(&form).await;
             ctx.say("Field was added").await?
         }
         Err(AddFieldError::IllegalAddBefore) => ctx.say("`add_before` is not valid").await?,
@@ -296,7 +317,7 @@ async fn remove_field(
 
     if form.remove_field(field) {
         ctx.say("Field was removed").await?;
-        ctx.data.save_form(form_id, form).await;
+        ctx.data.save_form(&form).await;
     } else {
         ctx.say("Unknown field").await?;
     }
@@ -308,15 +329,23 @@ async fn remove_field(
 #[poise::command(slash_command, rename = "create", ephemeral)]
 async fn create_form(
     ctx: ApplicationContext<'_>,
-    #[description = "The title of the form"] title: String,
+    #[description = "The title of the form"]
+    #[max_length = 45]
+    title: String,
+    #[description = "The text shown in top of responses after the form is submitted"]
+    #[max_length = 4096]
+    description: Option<String>,
     #[description = "The channel to create the thread under"]
     #[channel_types("Text")]
-    destination: GuildChannel,
+    destination: ChannelId,
     #[description = "New role/user to be mentioned on submission (leave it out to remove)"]
     mention: Option<SerializableMention>,
 ) -> Result<(), Error> {
     ctx.defer_ephemeral().await?;
-    ctx.data.create_form(title, destination.id, mention).await;
+    let mut form = Form::new(title, destination);
+    form.mention = mention;
+    form.set_description(description)?;
+    ctx.data.save_form(&form).await;
     ctx.say("Form was created").await?;
 
     Ok(())

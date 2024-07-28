@@ -7,12 +7,17 @@ use crate::state::State;
 mod commands;
 mod event_handler;
 mod state;
+mod responses;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type ApplicationContext<'a> = poise::ApplicationContext<'a, State, Error>;
 type FrameworkContext<'a> = poise::FrameworkContext<'a, State, Error>;
 type Context<'a> = poise::Context<'a, State, Error>;
 
+
+// TODO: what intents are needed?
+// TODO: what permissions are needed?
+// TODO: what if form is too long?
 
 #[tokio::main]
 async fn main() {

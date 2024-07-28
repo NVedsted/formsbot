@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+pub const FIELD_RESPONSE_MAX_LENGTH: u16 = 1024;
+
 #[derive(Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct FormId(Uuid);
 
@@ -50,15 +52,13 @@ impl State {
         self.forms.read().await.iter().find(|f| f.id == id).cloned()
     }
 
-    pub async fn create_form(&self, title: String, destination: ChannelId, mention: Option<SerializableMention>) {
-        self.forms.write().await.push(Form { id: FormId(Uuid::new_v4()), title, fields: vec![], destination, mention });
-    }
-
-    pub async fn save_form(&self, id: FormId, new_form: Form) {
+    pub async fn save_form(&self, new_form: &Form) {
         let mut forms = self.forms.write().await;
 
-        if let Some(form) = forms.iter_mut().find(|f| f.id == id) {
-            *form = new_form;
+        if let Some(form) = forms.iter_mut().find(|f| f.id == new_form.id) {
+            *form = new_form.clone();
+        } else {
+            forms.push(new_form.clone())
         }
     }
 
@@ -97,8 +97,8 @@ impl SerializableMention {
     }
 }
 
-impl std::fmt::Display for SerializableMention {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for SerializableMention {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(&self.mention(), f)
     }
 }
@@ -132,18 +132,12 @@ pub struct FormField {
 impl FormField {
     fn input_text<T: Into<String>>(&self, custom_id: T) -> CreateInputText {
         let mut builder = CreateInputText::new(self.style, &self.name, custom_id)
+            .min_length(self.min_length.unwrap_or(FIELD_RESPONSE_MAX_LENGTH))
+            .max_length(self.min_length.unwrap_or(FIELD_RESPONSE_MAX_LENGTH))
             .required(self.required);
 
         if let Some(placeholder) = &self.placeholder {
             builder = builder.placeholder(placeholder);
-        }
-
-        if let Some(min_length) = self.min_length {
-            builder = builder.min_length(min_length);
-        }
-
-        if let Some(max_length) = self.max_length {
-            builder = builder.max_length(max_length);
         }
 
         builder
@@ -156,8 +150,9 @@ impl FormField {
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Form {
-    pub id: FormId,
-    pub title: String,
+    id: FormId,
+    title: String,
+    description: Option<String>,
     fields: Vec<FormField>,
     pub destination: ChannelId,
     pub mention: Option<SerializableMention>,
@@ -168,7 +163,55 @@ pub enum AddFieldError {
     IllegalAddBefore,
 }
 
+#[derive(Debug)]
+pub struct FieldTooLong;
+
+impl Display for FieldTooLong {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "field too long")
+    }
+}
+
+impl std::error::Error for FieldTooLong {}
+
 impl Form {
+    pub fn new(title: String, destination: ChannelId) -> Self {
+        Self {
+            id: FormId(Uuid::new_v4()),
+            title,
+            description: None,
+            fields: vec![],
+            destination,
+            mention: None,
+        }
+    }
+
+    pub fn title(&self) -> &str {
+        &self.title
+    }
+
+    pub fn set_title(&mut self, title: String) -> Result<(), FieldTooLong> {
+        if title.len() > 256 {
+            return Err(FieldTooLong);
+        }
+
+        self.title = title;
+        Ok(())
+    }
+
+    pub fn description(&self) -> Option<&str> {
+        self.description.as_ref().map(|d| d.as_str())
+    }
+
+    pub fn set_description(&mut self, description: Option<String>) -> Result<(), FieldTooLong> {
+        if let Some(true) = description.as_ref().map(|d| d.len() > 4096) {
+            return Err(FieldTooLong);
+        }
+
+        self.description = description;
+        Ok(())
+    }
+    
     pub fn fields(&self) -> &[FormField] {
         &self.fields
     }
