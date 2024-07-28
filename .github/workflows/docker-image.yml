@@ -32,7 +32,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5.5.1
         with:
-          labels: |
+          tags: |
             type=semver,pattern={{version}}
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
 
