@@ -20,8 +20,13 @@ pub async fn event_handler(ctx: &Context, event: &FullEvent, framework: Framewor
         if !custom_id.starts_with(CUSTOM_ID_PREFIX) {
             return Ok(());
         }
-
         let form_id = custom_id[CUSTOM_ID_PREFIX.len()..].parse()?;
+
+        if let Some(cooldown) = framework.user_data.cooldown(*guild_id, form_id, interaction.user.id).await? {
+            reply(ctx, interaction, format!("You have submitted this form recently; please wait {} before trying again", humantime::format_duration(cooldown))).await?;
+            return Ok(());
+        }
+
         let Some(form) = framework.user_data.get_form(*guild_id, form_id).await? else {
             reply(ctx, interaction, "This form no longer exists").await?;
             return Ok(());
@@ -43,6 +48,8 @@ pub async fn event_handler(ctx: &Context, event: &FullEvent, framework: Framewor
         };
 
         create_response(ctx, &form, response).await?;
+
+        framework.user_data.trigger_cooldown(*guild_id, &form, interaction.user.id).await?;
     }
 
     Ok(())

@@ -35,7 +35,7 @@ pub async fn create_response(ctx: &Context, form: &Form, response: QuickModalRes
     }
 
     if let Some(description) = form.description() {
-        *content.get_or_insert_with(|| String::new()) += description;
+        *content.get_or_insert_with(String::new) += description;
     }
 
     let mut message_builder = CreateMessage::new().embed(embed_builder);

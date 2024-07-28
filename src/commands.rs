@@ -1,4 +1,6 @@
 #![allow(clippy::too_many_arguments)]
+
+use std::time::Duration;
 use poise::{ChoiceParameter, CreateReply, SlashArgument};
 use poise::serenity_prelude::*;
 
@@ -13,7 +15,7 @@ use crate::state::{AddFieldError, Form, FormField, FormId, SerializableMention, 
     slash_command,
     guild_only,
     ephemeral,
-    subcommands("create_form", "delete_form", "button", "fields", "destination", "rename", "mention", "show_form", "form_details", "description"
+    subcommands("create_form", "delete_form", "button", "fields", "destination", "rename", "mention", "show_form", "form_details", "description", "cooldown"
     )
 )]
 async fn form(_ctx: Context<'_>) -> Result<(), Error> {
@@ -61,6 +63,25 @@ async fn description(
     form.set_description(description)?;
     ctx.data.save_form(ctx.guild_id().unwrap(), &form).await?;
     ctx.say("Form description was changed").await?;
+    Ok(())
+}
+
+/// Changes the cooldown of a form
+#[poise::command(slash_command, ephemeral)]
+async fn cooldown(
+    ctx: ApplicationContext<'_>,
+    #[description = "The form to modify"]
+    #[rename = "form"]
+    #[autocomplete = "autocomplete_form"]
+    form_id: FormId,
+    #[description = "The new duration users must wait between submissions (leave it out to clear)"]
+    cooldown: Option<String>,
+) -> Result<(), Error> {
+    ctx.defer_ephemeral().await?;
+    let mut form = get_form(ctx, form_id).await?;
+    form.set_cooldown(cooldown.map(parse_cooldown).transpose()?);
+    ctx.data.save_form(ctx.guild_id().unwrap(), &form).await?;
+    ctx.say("Form cooldown was changed").await?;
     Ok(())
 }
 
@@ -248,6 +269,7 @@ async fn form_details(
             ("Destination", Some(form.destination.mention().to_string())),
             ("Description", form.description().map(str::to_owned)),
             ("Mentions", form.mention.map(|m| m.to_string())),
+            ("Cooldown", form.cooldown().map(|c| humantime::format_duration(c).to_string())),
         ]));
 
     ctx.send(CreateReply::default().embed(embed_builder)).await?;
@@ -390,6 +412,13 @@ async fn remove_field(
     Ok(())
 }
 
+fn parse_cooldown(cooldown: String) -> Result<Duration, Error> {
+    match humantime::parse_duration(&cooldown) {
+        Ok(cooldown) => Ok(cooldown),
+        Err(e) => Err(UserFriendlyError::new(format!("Cooldown was not formatted correctly: {e}")).into()),
+    }
+}
+
 /// Creates a new form
 #[poise::command(slash_command, rename = "create", ephemeral)]
 async fn create_form(
@@ -405,6 +434,8 @@ async fn create_form(
     destination: GuildChannel,
     #[description = "New role/user to be mentioned on submission"]
     mention: Option<SerializableMention>,
+    #[description = "How long users must wait between submitting (e.g. `15days 2min 2s`)"]
+    cooldown: Option<String>,
 ) -> Result<(), Error> {
     ctx.defer_ephemeral().await?;
 
@@ -413,6 +444,8 @@ async fn create_form(
     let mut form = Form::new(title, destination)?;
     form.mention = mention;
     form.set_description(description)?;
+    form.set_cooldown(cooldown.map(parse_cooldown).transpose()?);
+
     ctx.data.save_form(ctx.guild_id().unwrap(), &form).await?;
     ctx.say("Form was created").await?;
 

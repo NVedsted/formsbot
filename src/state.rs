@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use poise::serenity_prelude::*;
 use poise::SlashArgError;
-use redis::{AsyncCommands, FromRedisValue, RedisResult, RedisWrite, ToRedisArgs, Value};
+use redis::{AsyncCommands, FromRedisValue, RedisResult, RedisWrite, SetExpiry, SetOptions, ToRedisArgs, Value};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -53,6 +53,10 @@ fn get_forms_key(guild_id: GuildId) -> String {
     format!("forms:{guild_id}")
 }
 
+fn get_cooldown_key(guild_id: GuildId, form_id: FormId, user_id: UserId) -> String {
+    format!("forms:{guild_id}:{form_id}:{user_id}")
+}
+
 impl State {
     pub async fn get_form(&self, guild_id: GuildId, id: FormId) -> Result<Option<Form>, crate::Error> {
         Ok(self.connection_manager.clone().hget(get_forms_key(guild_id), id.to_string()).await?)
@@ -73,6 +77,26 @@ impl State {
 
     pub async fn get_fields(&self, guild_id: GuildId, id: FormId) -> Result<Option<Vec<FormField>>, crate::Error> {
         Ok(self.get_form(guild_id, id).await?.map(|f| f.fields))
+    }
+
+    pub async fn cooldown(&self, guild_id: GuildId, form_id: FormId, user_id: UserId) -> Result<Option<Duration>, crate::Error> {
+        let ttl: i64 = self.connection_manager.clone().ttl(get_cooldown_key(guild_id, form_id, user_id)).await?;
+        Ok(match ttl {
+            ..=0 => None,
+            s => Some(Duration::from_secs(s as u64))
+        })
+    }
+
+    pub async fn trigger_cooldown(&self, guild_id: GuildId, form: &Form, user_id: UserId) -> Result<(), crate::Error> {
+        let Some(duration) = form.cooldown else {
+            return Ok(())
+        };
+
+        self.connection_manager.clone().set_options(
+            get_cooldown_key(guild_id, form.id, user_id), 1,
+            SetOptions::default().with_expiration(SetExpiry::EX(duration.as_secs())),
+        ).await?;
+        Ok(())
     }
 }
 
@@ -199,6 +223,7 @@ pub struct Form {
     fields: Vec<FormField>,
     pub destination: ChannelId,
     pub mention: Option<SerializableMention>,
+    cooldown: Option<Duration>,
 }
 
 impl FromRedisValue for Form {
@@ -244,6 +269,7 @@ impl Form {
             fields: vec![],
             destination: destination.into(),
             mention: None,
+            cooldown: None,
         })
     }
 
@@ -268,6 +294,16 @@ impl Form {
 
         self.description = description;
         Ok(())
+    }
+
+    pub fn cooldown(&self) -> Option<Duration> {
+        self.cooldown
+    }
+
+    pub fn set_cooldown(&mut self, cooldown: Option<Duration>) {
+        self.cooldown = cooldown
+            .map(|d| Duration::from_secs(d.as_secs()))
+            .filter(|d| !d.is_zero());
     }
 
     pub fn fields(&self) -> &[FormField] {
