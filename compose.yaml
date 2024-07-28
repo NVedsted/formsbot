@@ -1,0 +1,22 @@
+services:
+  bot:
+    env_file: .env
+    environment:
+      RUST_LOG: warn
+      REDIS_URL: redis://redis/
+    build:
+      context: .
+    depends_on:
+      - redis
+  redis:
+    image: redis:7.2.5
+    restart: always
+    user: redis
+    volumes:
+      - redis-data:/data
+    expose:
+      - 6379
+    healthcheck:
+      test: ["CMD", "redis-cli","ping"]
+volumes:
+  redis-data:

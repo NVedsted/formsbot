@@ -1,0 +1,6 @@
+.idea/
+Dockerfile
+compose.yaml
+/bin
+/target
+.env
