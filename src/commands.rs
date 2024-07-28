@@ -15,6 +15,7 @@ use crate::state::{AddFieldError, Form, FormField, FormId, SerializableMention, 
     slash_command,
     guild_only,
     ephemeral,
+    default_member_permissions = "MANAGE_CHANNELS",
     subcommands("create_form", "delete_form", "button", "fields", "destination", "rename", "mention", "show_form", "form_details", "description", "cooldown", "cooldowns"
     )
 )]
