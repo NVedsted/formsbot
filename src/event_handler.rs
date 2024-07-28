@@ -6,7 +6,7 @@ use crate::responses::create_response;
 pub const CUSTOM_ID_PREFIX: &str = "show_form:";
 
 pub async fn event_handler(ctx: &Context, event: &FullEvent, framework: FrameworkContext<'_>) -> Result<(), Error> {
-    if let FullEvent::InteractionCreate { interaction: Interaction::Component(interaction) } = event {
+    if let FullEvent::InteractionCreate { interaction: Interaction::Component(interaction @ ComponentInteraction { guild_id: Some(guild_id), .. }) } = event {
         // TODO implement cooldown
         let custom_id = &interaction.data.custom_id;
         if !custom_id.starts_with(CUSTOM_ID_PREFIX) {
@@ -14,7 +14,7 @@ pub async fn event_handler(ctx: &Context, event: &FullEvent, framework: Framewor
         }
 
         let form_id = custom_id[CUSTOM_ID_PREFIX.len()..].parse()?;
-        let Some(form) = framework.user_data.get_form(form_id).await else {
+        let Some(form) = framework.user_data.get_form(*guild_id, form_id).await? else {
             interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new().ephemeral(true).content("This form no longer exists"))).await?;
             return Ok(());
         };

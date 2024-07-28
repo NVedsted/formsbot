@@ -1,6 +1,7 @@
 use poise::serenity_prelude as serenity;
 
 use crate::commands::get_commands;
+use crate::errors::on_error;
 use crate::event_handler::event_handler;
 use crate::state::State;
 
@@ -8,11 +9,13 @@ mod commands;
 mod event_handler;
 mod state;
 mod responses;
+mod errors;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type ApplicationContext<'a> = poise::ApplicationContext<'a, State, Error>;
 type FrameworkContext<'a> = poise::FrameworkContext<'a, State, Error>;
 type Context<'a> = poise::Context<'a, State, Error>;
+type FrameworkError<'a> = poise::FrameworkError<'a, State, Error>;
 
 
 // TODO: what intents are needed?
@@ -24,17 +27,18 @@ async fn main() {
     env_logger::init();
 
     let token = std::env::var("DISCORD_TOKEN").expect("please provide DISCORD_TOKEN");
-    let redis_client = redis::Client::open("redis://127.0.0.1/").expect("failed to connect to redis");
-
+    let redis_url = std::env::var("REDIS_URL").expect("please provide REDIS_URL");
+    let redis_client = redis::Client::open(redis_url).expect("failed to connect to redis");
     let connection_manager = redis_client.get_connection_manager().await.expect("failed to setup redis connection manager");
 
     let framework = poise::Framework::new(
         poise::FrameworkOptions {
             commands: get_commands(),
+            on_error: |error| Box::pin(on_error(error)),
             event_handler: |ctx, event, framework, _| Box::pin(event_handler(ctx, event, framework)),
             ..Default::default()
         },
-        |_, _, _| Box::pin(async move { Ok(State { connection_manager, forms: Default::default() }) }));
+        |_, _, _| Box::pin(async move { Ok(State { connection_manager }) }));
 
     let mut client = serenity::Client::builder(token, serenity::GatewayIntents::non_privileged())
         .framework(framework)

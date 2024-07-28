@@ -437,6 +437,7 @@ dependencies = [
  "serde_json",
  "serenity",
  "tokio",
+ "tracing",
  "uuid",
 ]
 

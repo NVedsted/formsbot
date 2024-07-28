@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use poise::serenity_prelude::*;
 use poise::SlashArgError;
+use redis::{AsyncCommands, FromRedisValue, RedisResult, RedisWrite, ToRedisArgs, Value};
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
 use uuid::Uuid;
 
 pub const LABEL_MAX_LENGTH: usize = 45;
@@ -46,41 +46,32 @@ impl poise::SlashArgument for FormId {
 
 pub struct State {
     pub connection_manager: redis::aio::ConnectionManager,
-    pub forms: RwLock<Vec<Form>>, // TODO: add persistence
+}
+
+fn get_forms_key(guild_id: GuildId) -> String {
+    format!("forms:{guild_id}")
 }
 
 impl State {
-    pub async fn get_form(&self, id: FormId) -> Option<Form> {
-        self.forms.read().await.iter().find(|f| f.id == id).cloned()
+    pub async fn get_form(&self, guild_id: GuildId, id: FormId) -> Result<Option<Form>, crate::Error> {
+        Ok(self.connection_manager.clone().hget(get_forms_key(guild_id), id.to_string()).await?)
     }
 
-    pub async fn save_form(&self, new_form: &Form) {
-        let mut forms = self.forms.write().await;
-
-        if let Some(form) = forms.iter_mut().find(|f| f.id == new_form.id) {
-            *form = new_form.clone();
-        } else {
-            forms.push(new_form.clone())
-        }
+    pub async fn save_form(&self, guild_id: GuildId, new_form: &Form) -> Result<(), crate::Error> {
+        Ok(self.connection_manager.clone().hset(get_forms_key(guild_id), new_form.id.to_string(), new_form).await?)
     }
 
-    pub async fn delete_form(&self, id: FormId) -> bool {
-        let mut forms = self.forms.write().await;
-
-        if let Some(index) = forms.iter().enumerate().find(|(_, f)| f.id == id).map(|(i, _)| i) {
-            forms.swap_remove(index);
-            true
-        } else {
-            false
-        }
+    pub async fn delete_form(&self, guild_id: GuildId, id: FormId) -> Result<bool, crate::Error> {
+        Ok(self.connection_manager.clone().hdel(get_forms_key(guild_id), id.to_string()).await?)
     }
 
-    pub async fn get_form_ids(&self) -> Vec<(FormId, String)> {
-        self.forms.read().await.iter().map(|f| (f.id, f.title.clone())).collect()
+    pub async fn get_form_ids(&self, guild_id: GuildId) -> Result<Vec<(FormId, String)>, crate::Error> {
+        let forms: Vec<Form> = self.connection_manager.clone().hvals(get_forms_key(guild_id)).await?;
+        Ok(forms.into_iter().map(|f| (f.id, f.title.clone())).collect())
     }
 
-    pub async fn get_fields(&self, id: FormId) -> Option<Vec<FormField>> {
-        Some(self.get_form(id).await?.fields)
+    pub async fn get_fields(&self, guild_id: GuildId, id: FormId) -> Result<Option<Vec<FormField>>, crate::Error> {
+        Ok(self.get_form(guild_id, id).await?.map(|f| f.fields))
     }
 }
 
@@ -204,6 +195,23 @@ pub struct Form {
     fields: Vec<FormField>,
     pub destination: ChannelId,
     pub mention: Option<SerializableMention>,
+}
+
+impl FromRedisValue for Form {
+    fn from_redis_value(v: &Value) -> RedisResult<Self> {
+        let serialized = <String as FromRedisValue>::from_redis_value(v)?;
+        serde_json::from_str(&serialized).map_err(|e| (redis::ErrorKind::ParseError, "not valid form json", e.to_string()).into())
+    }
+}
+
+impl ToRedisArgs for Form {
+    fn write_redis_args<W>(&self, out: &mut W)
+    where
+        W: ?Sized + RedisWrite,
+    {
+        let serialized = serde_json::to_vec(self).expect("failed to serialize form json");
+        out.write_arg(&serialized);
+    }
 }
 
 pub enum AddFieldError {

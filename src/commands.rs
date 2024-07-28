@@ -3,6 +3,7 @@ use poise::{ChoiceParameter, SlashArgument};
 use poise::serenity_prelude::*;
 
 use crate::{ApplicationContext, Context, Error};
+use crate::errors::UserFriendlyError;
 use crate::event_handler::CUSTOM_ID_PREFIX;
 use crate::responses::create_response;
 use crate::state::{AddFieldError, Form, FormField, FormId, SerializableMention, State};
@@ -19,6 +20,10 @@ async fn form(_ctx: Context<'_>) -> Result<(), Error> {
     panic!("called root command")
 }
 
+async fn get_form(ctx: ApplicationContext<'_>, form_id: FormId) -> Result<Form, Error> {
+    ctx.data.get_form(ctx.guild_id().unwrap(), form_id).await?.ok_or_else(|| UserFriendlyError::new("Form could not be found").into())
+}
+
 /// Changes the destination channel of a form
 #[poise::command(slash_command, ephemeral)]
 async fn rename(
@@ -32,13 +37,9 @@ async fn rename(
     title: String,
 ) -> Result<(), Error> {
     ctx.defer_ephemeral().await?;
-    let Some(mut form) = ctx.data.get_form(form_id).await else {
-        ctx.say("Unknown form").await?;
-        return Ok(());
-    };
-
+    let mut form = get_form(ctx, form_id).await?;
     form.set_title(title)?;
-    ctx.data.save_form(&form).await;
+    ctx.data.save_form(ctx.guild_id().unwrap(), &form).await?;
     ctx.say("Form was renamed").await?;
     Ok(())
 }
@@ -55,11 +56,7 @@ async fn mention(
     mention: Option<SerializableMention>,
 ) -> Result<(), Error> {
     ctx.defer_ephemeral().await?;
-    let Some(mut form) = ctx.data.get_form(form_id).await else {
-        ctx.say("Unknown form").await?;
-        return Ok(());
-    };
-
+    let mut form = get_form(ctx, form_id).await?;
     form.mention = mention;
     ctx.say("Mention of the form was changed").await?;
     Ok(())
@@ -77,13 +74,9 @@ async fn destination(
     #[channel_types("Text")]
     destination: ChannelId,
 ) -> Result<(), Error> {
-    let Some(mut form) = ctx.data.get_form(form_id).await else {
-        ctx.say("Unknown form").await?;
-        return Ok(());
-    };
-
+    let mut form = get_form(ctx, form_id).await?;
     form.destination = destination;
-    ctx.data.save_form(&form).await;
+    ctx.data.save_form(ctx.guild_id().unwrap(), &form).await?;
     ctx.say("Form destination was updated").await?;
     Ok(())
 }
@@ -162,11 +155,7 @@ async fn show_form(
     #[description = "Whether submitting should create a response (defaults to false)"]
     create: Option<bool>,
 ) -> Result<(), Error> {
-    let Some(form) = ctx.data.get_form(form_id).await else {
-        ctx.say("Unknown form").await?;
-        return Ok(());
-    };
-
+    let form = get_form(ctx, form_id).await?;
     let Some(quick_modal) = form.quick_modal() else {
         ctx.say("A form must have fields to be shown.").await?;
         return Ok(());
@@ -236,11 +225,7 @@ async fn add_field(
     add_before: Option<usize>,
     #[description = "Whether to inline the field when printing responses"] inline: Option<bool>,
 ) -> Result<(), Error> {
-    let Some(mut form) = ctx.data.get_form(form_id).await else {
-        ctx.say("Unknown form").await?;
-        return Ok(());
-    };
-
+    let mut form = get_form(ctx, form_id).await?;
     let mut field = FormField::new(name, style.into())?;
     field.min_length = min_length;
     field.max_length = max_length;
@@ -250,7 +235,7 @@ async fn add_field(
 
     match form.add_field(field, add_before) {
         Ok(_) => {
-            ctx.data.save_form(&form).await;
+            ctx.data.save_form(ctx.guild_id().unwrap(), &form).await?;
             ctx.say("Field was added").await?
         }
         Err(AddFieldError::IllegalAddBefore) => ctx.say("`add_before` is not valid").await?,
@@ -286,15 +271,19 @@ async fn autocomplete_field(
     ctx: ApplicationContext<'_>,
     _partial: &str,
 ) -> Vec<AutocompleteChoice> {
-    if let Some(form_id) = find_value(ctx, "form").await {
-        if let Some(fields) = ctx.data.get_fields(form_id).await {
-            fields.into_iter().enumerate().map(|(i, f)| AutocompleteChoice::new(f.name(), i)).collect()
-        } else {
-            vec![]
+    let Some(form_id) = find_value(ctx, "form").await else {
+        return vec![];
+    };
+
+    match ctx.data.get_fields(ctx.guild_id().unwrap(), form_id).await {
+        Ok(Some(fields)) => {
+            return fields.into_iter().enumerate().map(|(i, f)| AutocompleteChoice::new(f.name(), i)).collect();
         }
-    } else {
-        vec![]
+        Err(e) => tracing::error!("an error occurred fetching auto-complete values for fields: {}", e),
+        _ => {}
     }
+
+    vec![]
 }
 
 /// Removes a field from a form
@@ -309,14 +298,10 @@ async fn remove_field(
     #[autocomplete = "autocomplete_field"]
     field: usize,
 ) -> Result<(), Error> {
-    let Some(mut form) = ctx.data.get_form(form_id).await else {
-        ctx.say("Unknown form").await?;
-        return Ok(());
-    };
-
+    let mut form = get_form(ctx, form_id).await?;
     if form.remove_field(field) {
         ctx.say("Field was removed").await?;
-        ctx.data.save_form(&form).await;
+        ctx.data.save_form(ctx.guild_id().unwrap(), &form).await?;
     } else {
         ctx.say("Unknown field").await?;
     }
@@ -344,7 +329,7 @@ async fn create_form(
     let mut form = Form::new(title, destination)?;
     form.mention = mention;
     form.set_description(description)?;
-    ctx.data.save_form(&form).await;
+    ctx.data.save_form(ctx.guild_id().unwrap(), &form).await?;
     ctx.say("Form was created").await?;
 
     Ok(())
@@ -354,7 +339,15 @@ async fn autocomplete_form(
     ctx: ApplicationContext<'_>,
     _partial: &str,
 ) -> Vec<AutocompleteChoice> {
-    ctx.data.get_form_ids().await.into_iter().map(|(id, name)| AutocompleteChoice::new(name, id.to_string())).collect()
+    match ctx.data.get_form_ids(ctx.guild_id().unwrap()).await {
+        Ok(form_ids) => {
+            form_ids.into_iter().map(|(id, name)| AutocompleteChoice::new(name, id.to_string())).collect()
+        }
+        Err(e) => {
+            tracing::error!("an error occurred fetching auto-complete values for forms: {}", e);
+            vec![]
+        }
+    }
 }
 
 /// Deletes a form
@@ -366,7 +359,7 @@ async fn delete_form(
     #[autocomplete = "autocomplete_form"]
     form_id: FormId,
 ) -> Result<(), Error> {
-    if ctx.data.delete_form(form_id).await {
+    if ctx.data.delete_form(ctx.guild_id().unwrap(), form_id).await? {
         ctx.say("Form was deleted").await?;
     } else {
         ctx.say("Unknown form").await?;
