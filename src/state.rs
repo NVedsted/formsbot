@@ -98,6 +98,10 @@ impl State {
         ).await?;
         Ok(())
     }
+
+    pub async fn clear_cooldown(&self, guild_id: GuildId, form_id: FormId, user_id: UserId) -> Result<bool, crate::Error> {
+        Ok(self.connection_manager.clone().del(get_cooldown_key(guild_id, form_id, user_id)).await?)
+    }
 }
 
 #[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]

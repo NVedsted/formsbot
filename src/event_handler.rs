@@ -15,7 +15,6 @@ async fn reply<T: Into<String>>(ctx: &Context, interaction: &ComponentInteractio
 
 pub async fn event_handler(ctx: &Context, event: &FullEvent, framework: FrameworkContext<'_>) -> Result<(), Error> {
     if let FullEvent::InteractionCreate { interaction: Interaction::Component(interaction @ ComponentInteraction { guild_id: Some(guild_id), .. }) } = event {
-        // TODO implement cooldown
         let custom_id = &interaction.data.custom_id;
         if !custom_id.starts_with(CUSTOM_ID_PREFIX) {
             return Ok(());

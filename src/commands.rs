@@ -15,11 +15,38 @@ use crate::state::{AddFieldError, Form, FormField, FormId, SerializableMention, 
     slash_command,
     guild_only,
     ephemeral,
-    subcommands("create_form", "delete_form", "button", "fields", "destination", "rename", "mention", "show_form", "form_details", "description", "cooldown"
+    subcommands("create_form", "delete_form", "button", "fields", "destination", "rename", "mention", "show_form", "form_details", "description", "cooldown", "cooldowns"
     )
 )]
-async fn form(_ctx: Context<'_>) -> Result<(), Error> {
+async fn forms(_ctx: Context<'_>) -> Result<(), Error> {
     panic!("called root command")
+}
+
+/// Manage cooldowns
+#[poise::command(slash_command, subcommands("clear_cooldown"))]
+async fn cooldowns(_ctx: Context<'_>) -> Result<(), Error> {
+    panic!("called root command")
+}
+
+/// Clear cooldown of user for a form
+#[poise::command(slash_command, rename = "clear", ephemeral)]
+async fn clear_cooldown(
+    ctx: ApplicationContext<'_>,
+    #[description = "The form to clear cooldowns for"]
+    #[rename = "form"]
+    #[autocomplete = "autocomplete_form"]
+    form_id: FormId,
+    #[description = "The user to clear cooldown for"]
+    #[rename = "user"]
+    user_id: UserId,
+) -> Result<(), Error> {
+    ctx.defer_ephemeral().await?;
+    if ctx.data.clear_cooldown(ctx.guild_id().unwrap(), form_id, user_id).await? {
+        ctx.say(format!("Cooldown was cleared for {}", user_id.mention())).await?;
+    } else {
+        ctx.say(format!("{} was not on cooldown for this form", user_id.mention())).await?;
+    }
+    Ok(())
 }
 
 async fn get_form(ctx: ApplicationContext<'_>, form_id: FormId) -> Result<Form, Error> {
@@ -492,5 +519,5 @@ async fn register(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 pub fn get_commands() -> Vec<poise::Command<State, Error>> {
-    vec![register(), form()]
+    vec![register(), forms()]
 }

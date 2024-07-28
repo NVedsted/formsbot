@@ -17,11 +17,6 @@ type FrameworkContext<'a> = poise::FrameworkContext<'a, State, Error>;
 type Context<'a> = poise::Context<'a, State, Error>;
 type FrameworkError<'a> = poise::FrameworkError<'a, State, Error>;
 
-
-// TODO: what intents are needed?
-// TODO: what permissions are needed?
-// TODO: what if form is too long?
-
 #[tokio::main]
 async fn main() {
     env_logger::init();
