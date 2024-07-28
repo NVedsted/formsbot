@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+pub const LABEL_MAX_LENGTH: usize = 45;
+pub const PLACEHOLDER_MAX_LENGTH: usize = 100;
 pub const FIELD_RESPONSE_MAX_LENGTH: u16 = 1024;
 
 #[derive(Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -17,7 +19,7 @@ impl FromStr for FormId {
     type Err = uuid::Error;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        Uuid::try_parse(s).map(|u| FormId(u))
+        Uuid::try_parse(s).map(FormId)
     }
 }
 
@@ -120,9 +122,9 @@ impl poise::SlashArgument for SerializableMention {
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct FormField {
-    pub name: String,
+    name: String,
     pub style: InputTextStyle,
-    pub placeholder: Option<String>,
+    placeholder: Option<String>,
     pub min_length: Option<u16>,
     pub max_length: Option<u16>,
     pub required: bool,
@@ -130,6 +132,44 @@ pub struct FormField {
 }
 
 impl FormField {
+    pub fn new(name: String, style: InputTextStyle) -> Result<Self, ValueTooLong> {
+        Self::validate_name(&name)?;
+
+        Ok(Self {
+            name,
+            style,
+            placeholder: None,
+            min_length: None,
+            max_length: None,
+            required: true,
+            inline: false,
+        })
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn set_name(&mut self, name: String) -> Result<(), ValueTooLong> {
+        Self::validate_name(&name)?;
+
+        self.name = name;
+        Ok(())
+    }
+
+    pub fn placeholder(&self) -> Option<&str> {
+        self.placeholder.as_deref()
+    }
+
+    pub fn set_placeholder(&mut self, placeholder: Option<String>) -> Result<(), ValueTooLong> {
+        if placeholder.as_ref().map(|p| p.len() > PLACEHOLDER_MAX_LENGTH).unwrap_or(false) {
+            return Err(ValueTooLong);
+        }
+
+        self.placeholder = placeholder;
+        Ok(())
+    }
+
     fn input_text<T: Into<String>>(&self, custom_id: T) -> CreateInputText {
         let mut builder = CreateInputText::new(self.style, &self.name, custom_id)
             .min_length(self.min_length.unwrap_or(FIELD_RESPONSE_MAX_LENGTH))
@@ -145,6 +185,14 @@ impl FormField {
 
     pub fn apply_to_embed(&self, embed: CreateEmbed, value: String) -> CreateEmbed {
         embed.field(&self.name, value, self.inline)
+    }
+
+    fn validate_name(name: &str) -> Result<(), ValueTooLong> {
+        if name.len() > LABEL_MAX_LENGTH {
+            Err(ValueTooLong)
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -164,54 +212,52 @@ pub enum AddFieldError {
 }
 
 #[derive(Debug)]
-pub struct FieldTooLong;
+pub struct ValueTooLong;
 
-impl Display for FieldTooLong {
+impl Display for ValueTooLong {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "field too long")
     }
 }
 
-impl std::error::Error for FieldTooLong {}
+impl std::error::Error for ValueTooLong {}
 
 impl Form {
-    pub fn new(title: String, destination: ChannelId) -> Self {
-        Self {
+    pub fn new(title: String, destination: ChannelId) -> Result<Self, ValueTooLong> {
+        Self::validate_title(&title)?;
+        Ok(Self {
             id: FormId(Uuid::new_v4()),
             title,
             description: None,
             fields: vec![],
             destination,
             mention: None,
-        }
+        })
     }
 
     pub fn title(&self) -> &str {
         &self.title
     }
 
-    pub fn set_title(&mut self, title: String) -> Result<(), FieldTooLong> {
-        if title.len() > 256 {
-            return Err(FieldTooLong);
-        }
-
+    pub fn set_title(&mut self, title: String) -> Result<(), ValueTooLong> {
+        Self::validate_title(&title)?;
         self.title = title;
         Ok(())
     }
 
     pub fn description(&self) -> Option<&str> {
-        self.description.as_ref().map(|d| d.as_str())
+        self.description.as_deref()
     }
 
-    pub fn set_description(&mut self, description: Option<String>) -> Result<(), FieldTooLong> {
+    pub fn set_description(&mut self, description: Option<String>) -> Result<(), ValueTooLong> {
         if let Some(true) = description.as_ref().map(|d| d.len() > 4096) {
-            return Err(FieldTooLong);
+            return Err(ValueTooLong);
         }
 
         self.description = description;
         Ok(())
     }
-    
+
     pub fn fields(&self) -> &[FormField] {
         &self.fields
     }
@@ -230,37 +276,21 @@ impl Form {
 
     pub fn add_field(
         &mut self,
-        name: String,
-        style: InputTextStyle,
-        placeholder: Option<String>,
-        min_length: Option<u16>,
-        max_length: Option<u16>,
-        required: Option<bool>,
-        inline: Option<bool>,
+        field: FormField,
         add_before: Option<usize>,
     ) -> Result<(), AddFieldError> {
         if self.fields.len() >= 5 {
             return Err(AddFieldError::TooManyFields);
         }
 
-        let new_field = FormField {
-            name,
-            style,
-            placeholder,
-            min_length,
-            max_length,
-            required: required.unwrap_or(true),
-            inline: inline.unwrap_or(false),
-        };
-
         if let Some(i) = add_before {
             if i > self.fields.len() {
                 return Err(AddFieldError::IllegalAddBefore);
             }
 
-            self.fields.insert(i, new_field);
+            self.fields.insert(i, field);
         } else {
-            self.fields.push(new_field);
+            self.fields.push(field);
         }
 
         Ok(())
@@ -272,6 +302,14 @@ impl Form {
             true
         } else {
             false
+        }
+    }
+
+    fn validate_title(title: &str) -> Result<(), ValueTooLong> {
+        if title.len() > 256 {
+            Err(ValueTooLong)
+        } else {
+            Ok(())
         }
     }
 }

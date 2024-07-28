@@ -1,10 +1,11 @@
+#![allow(clippy::too_many_arguments)]
 use poise::{ChoiceParameter, SlashArgument};
 use poise::serenity_prelude::*;
 
 use crate::{ApplicationContext, Context, Error};
 use crate::event_handler::CUSTOM_ID_PREFIX;
 use crate::responses::create_response;
-use crate::state::{AddFieldError, Form, FormId, SerializableMention, State};
+use crate::state::{AddFieldError, Form, FormField, FormId, SerializableMention, State};
 
 /// Manage forms in the server
 #[poise::command(
@@ -240,16 +241,14 @@ async fn add_field(
         return Ok(());
     };
 
-    match form.add_field(
-        name,
-        style.into(),
-        placeholder,
-        min_length,
-        max_length,
-        required,
-        inline,
-        add_before,
-    ) {
+    let mut field = FormField::new(name, style.into())?;
+    field.min_length = min_length;
+    field.max_length = max_length;
+    field.required = required.unwrap_or(true);
+    field.inline = inline.unwrap_or(false);
+    field.set_placeholder(placeholder)?;
+
+    match form.add_field(field, add_before) {
         Ok(_) => {
             ctx.data.save_form(&form).await;
             ctx.say("Field was added").await?
@@ -261,12 +260,12 @@ async fn add_field(
     Ok(())
 }
 
-fn find_resolved_value<'a>(ctx: ApplicationContext, opts: &'a [ResolvedOption], name: &str) -> Option<&'a ResolvedValue<'a>> {
+fn find_resolved_value<'a>(opts: &'a [ResolvedOption], name: &str) -> Option<&'a ResolvedValue<'a>> {
     for opt in opts {
         match &opt.value {
             ResolvedValue::SubCommand(opts)
             | ResolvedValue::SubCommandGroup(opts) => {
-                return find_resolved_value(ctx, opts, name);
+                return find_resolved_value(opts, name);
             }
             v if opt.name == name => {
                 return Some(v);
@@ -279,7 +278,7 @@ fn find_resolved_value<'a>(ctx: ApplicationContext, opts: &'a [ResolvedOption], 
 
 async fn find_value<T: SlashArgument>(ctx: ApplicationContext<'_>, name: &str) -> Option<T> {
     let options = ctx.interaction.data.options();
-    let value = find_resolved_value(ctx, &options, name)?;
+    let value = find_resolved_value(&options, name)?;
     SlashArgument::extract(ctx.serenity_context, ctx.interaction, value).await.ok()
 }
 
@@ -289,7 +288,7 @@ async fn autocomplete_field(
 ) -> Vec<AutocompleteChoice> {
     if let Some(form_id) = find_value(ctx, "form").await {
         if let Some(fields) = ctx.data.get_fields(form_id).await {
-            fields.into_iter().enumerate().map(|(i, f)| AutocompleteChoice::new(f.name, i)).collect()
+            fields.into_iter().enumerate().map(|(i, f)| AutocompleteChoice::new(f.name(), i)).collect()
         } else {
             vec![]
         }
@@ -342,7 +341,7 @@ async fn create_form(
     mention: Option<SerializableMention>,
 ) -> Result<(), Error> {
     ctx.defer_ephemeral().await?;
-    let mut form = Form::new(title, destination);
+    let mut form = Form::new(title, destination)?;
     form.mention = mention;
     form.set_description(description)?;
     ctx.data.save_form(&form).await;
