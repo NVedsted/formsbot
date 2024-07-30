@@ -1,7 +1,9 @@
 #![allow(clippy::too_many_arguments)]
 
 use std::time::Duration;
+
 use poise::{ChoiceParameter, CreateReply, SlashArgument};
+use poise::futures_util::StreamExt;
 use poise::serenity_prelude::*;
 
 use crate::{ApplicationContext, Context, Error};
@@ -513,6 +515,86 @@ async fn delete_form(
     Ok(())
 }
 
+#[poise::command(slash_command, ephemeral)]
+async fn test(
+    ctx: ApplicationContext<'_>,
+    #[description = "The form to consider"]
+    #[rename = "form"]
+    #[autocomplete = "autocomplete_form"]
+    form_id: FormId,
+) -> Result<(), Error> {
+    ctx.defer_ephemeral().await?;
+    let form = get_form(ctx, form_id).await?;
+    let mut embed_builder = CreateEmbed::new()
+        .title(form.title());
+
+    fn style_list<const N: usize>(elements: [(&str, Option<String>); N]) -> String {
+        elements.into_iter().filter_map(|(name, value)| value.map(|v| (name, v)))
+            .map(|(name, v)| format!("- **{}**: {}", name, v))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn field_details(field: &FormField) -> String {
+        style_list([
+            ("Style", match field.style {
+                InputTextStyle::Short => Some("Short".to_owned()),
+                InputTextStyle::Paragraph => Some("Paragraph".to_owned()),
+                _ => None,
+            }),
+            ("Placeholder", field.placeholder().map(str::to_owned)),
+            ("Minimum length", field.min_length.map(|l| l.to_string())),
+            ("Max length", field.max_length.map(|l| l.to_string())),
+            ("Required", Some(field.required.to_string())),
+            ("In-line", Some(field.inline.to_string())),
+        ])
+    }
+
+    embed_builder = form.fields().iter()
+        .fold(embed_builder, |acc, f| acc.field(f.name(), field_details(f), true))
+        .description(style_list([
+            ("Destination", Some(form.destination.mention().to_string())),
+            ("Description", form.description().map(str::to_owned)),
+            ("Mentions", form.mention.map(|m| m.to_string())),
+            ("Cooldown", form.cooldown().map(|c| humantime::format_duration(c).to_string())),
+        ]));
+    // Title
+    // Description
+    // destination
+    // mention
+    // cooldown
+
+    let default_roles = form.mention.and_then(|r| r.role()).map(|r| vec![r]);
+    let default_users = form.mention.and_then(|r| r.user()).map(|r| vec![r]);
+
+    let menu = ctx.send(CreateReply::default()
+        .embed(embed_builder)
+        .components(vec![
+        CreateActionRow::Buttons(vec![
+            CreateButton::new("button1").label("Set title"),
+            CreateButton::new("button2").label("Set description"),
+            CreateButton::new("button3").label("Set cooldown"),
+        ]),
+        CreateActionRow::SelectMenu(CreateSelectMenu::new("select1", CreateSelectMenuKind::Channel { channel_types: Some(vec![ChannelType::Text]), default_channels: Some(vec![form.destination]) })
+            .placeholder("Select destination")),
+        CreateActionRow::SelectMenu(CreateSelectMenu::new("select2", CreateSelectMenuKind::Mentionable { default_users, default_roles })
+            .min_values(0)
+            .placeholder("Select mention"))
+    ])).await?.into_message().await?;
+
+    let mut collector = menu.await_component_interaction(ctx)
+        .timeout(Duration::from_secs(10))
+        .stream();
+
+    while let Some(interaction) = collector.next().await {
+        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new().content("Ok").ephemeral(true))).await?;
+    }
+
+    menu.delete(Context::Application(ctx)).await?;
+
+    Ok(())
+}
+
 #[poise::command(prefix_command, owners_only)]
 async fn register(ctx: Context<'_>) -> Result<(), Error> {
     poise::builtins::register_application_commands_buttons(ctx).await?;
@@ -520,5 +602,5 @@ async fn register(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 pub fn get_commands() -> Vec<poise::Command<State, Error>> {
-    vec![register(), forms()]
+    vec![register(), forms(), test()]
 }

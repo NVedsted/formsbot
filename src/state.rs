@@ -117,6 +117,20 @@ impl SerializableMention {
             SerializableMention::User(u) => Mention::User(u),
         }
     }
+
+    pub fn role(&self) -> Option<RoleId> {
+        match self {
+            SerializableMention::Role(r) => Some(*r),
+            _ => None,
+        }
+    }
+
+    pub fn user(&self) -> Option<UserId> {
+        match self {
+            SerializableMention::User(u) => Some(*u),
+            _ => None,
+        }
+    }
 }
 
 impl Display for SerializableMention {
