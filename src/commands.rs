@@ -11,6 +11,7 @@ use crate::errors::UserFriendlyError;
 use crate::event_handler::CUSTOM_ID_PREFIX;
 use crate::responses::create_response;
 use crate::state::{AddFieldError, Form, FormField, FormId, SerializableMention, State};
+use crate::utils::ApplicationContextExt;
 
 /// Manage forms in the server
 #[poise::command(
@@ -567,30 +568,60 @@ async fn test(
     let default_roles = form.mention.and_then(|r| r.role()).map(|r| vec![r]);
     let default_users = form.mention.and_then(|r| r.user()).map(|r| vec![r]);
 
-    let menu = ctx.send(CreateReply::default()
+    const SET_TITLE: &str = "set_title";
+    const SET_DESCRIPTION: &str = "set_description";
+    const SET_COOLDOWN: &str = "set_cooldown";
+    const SET_DESTINATION: &str = "set_destination";
+    const SET_MENTION: &str = "set_mention";
+
+    let menu_handle = ctx.send(CreateReply::default()
         .embed(embed_builder)
         .components(vec![
-        CreateActionRow::Buttons(vec![
-            CreateButton::new("button1").label("Set title"),
-            CreateButton::new("button2").label("Set description"),
-            CreateButton::new("button3").label("Set cooldown"),
-        ]),
-        CreateActionRow::SelectMenu(CreateSelectMenu::new("select1", CreateSelectMenuKind::Channel { channel_types: Some(vec![ChannelType::Text]), default_channels: Some(vec![form.destination]) })
-            .placeholder("Select destination")),
-        CreateActionRow::SelectMenu(CreateSelectMenu::new("select2", CreateSelectMenuKind::Mentionable { default_users, default_roles })
-            .min_values(0)
-            .placeholder("Select mention"))
-    ])).await?.into_message().await?;
+            CreateActionRow::Buttons(vec![
+                CreateButton::new(SET_TITLE).label("Set title"),
+                CreateButton::new(SET_DESCRIPTION).label("Set description"),
+                CreateButton::new(SET_COOLDOWN).label("Set cooldown"),
+            ]),
+            CreateActionRow::SelectMenu(CreateSelectMenu::new(SET_DESTINATION, CreateSelectMenuKind::Channel { channel_types: Some(vec![ChannelType::Text]), default_channels: Some(vec![form.destination]) })
+                .placeholder("Select destination")),
+            CreateActionRow::SelectMenu(CreateSelectMenu::new(SET_MENTION, CreateSelectMenuKind::Mentionable { default_users, default_roles })
+                .min_values(0)
+                .placeholder("Select mention")),
+        ])).await?;
+
+    let menu = menu_handle.message().await?;
 
     let mut collector = menu.await_component_interaction(ctx)
         .timeout(Duration::from_secs(10))
         .stream();
 
     while let Some(interaction) = collector.next().await {
-        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new().content("Ok").ephemeral(true))).await?;
+        match (&interaction.data.custom_id[..], &interaction.data.kind) {
+            (SET_TITLE, ComponentInteractionDataKind::Button) => {
+                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new().content("Nice try setting title").ephemeral(true))).await?;
+            }
+            (SET_DESCRIPTION, ComponentInteractionDataKind::Button) => {
+                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new().content("Nice try setting desc").ephemeral(true))).await?;
+            }
+            (SET_COOLDOWN, ComponentInteractionDataKind::Button) => {
+                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new().content("Nice try setting cd").ephemeral(true))).await?;
+            }
+            (SET_DESTINATION, ComponentInteractionDataKind::ChannelSelect { values }) => {
+                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new().content("Nice try setting dest").ephemeral(true))).await?;
+            }
+            (SET_MENTION, ComponentInteractionDataKind::MentionableSelect { values }) => {
+                match ctx.to_mentionable(values.first().unwrap().clone()).unwrap() {
+                    SerializableMention::Role(_) => println!("Oh my god, they selected role"),
+                    SerializableMention::User(_) => println!("Oh my god, they selected user"),
+                }
+
+                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new().content("Nice try setting mentioj").ephemeral(true))).await?;
+            }
+            _ => {}
+        }
     }
 
-    menu.delete(Context::Application(ctx)).await?;
+    menu_handle.delete(ctx.into()).await?;
 
     Ok(())
 }

@@ -10,6 +10,8 @@ mod event_handler;
 mod state;
 mod responses;
 mod errors;
+mod extensions;
+mod utils;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type ApplicationContext<'a> = poise::ApplicationContext<'a, State, Error>;
