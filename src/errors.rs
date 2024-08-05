@@ -21,12 +21,14 @@ impl std::error::Error for UserFriendlyError {}
 
 pub async fn on_error(error: FrameworkError<'_>) {
     match error {
-        FrameworkError::Command { ctx, error, .. } if error.is::<UserFriendlyError>() => {
-            let error = error.downcast::<UserFriendlyError>().expect("not a user-friendly error");
-
-            if let Err(e) = ctx.say(error.to_string()).await {
-                tracing::error!("Error while handling user-friendly error: {}", e);
+        FrameworkError::Command { ctx, error , .. } => {
+            if let Some(error) = error.downcast_ref::<UserFriendlyError>() {
+                if let Err(e) = ctx.say(error.to_string()).await {
+                    tracing::error!(error = ?e, "Error while handling user-friendly error");
+                }
             }
+
+            tracing::error!(?error, "Error occurred handling command")
         }
         _ => {
             if let Err(e) = poise::builtins::on_error(error).await {
