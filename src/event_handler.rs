@@ -2,6 +2,7 @@ use poise::serenity_prelude::*;
 
 use crate::{Error, FrameworkContext};
 use crate::responses::create_response;
+use crate::state::FormRef;
 
 pub const CUSTOM_ID_PREFIX: &str = "show_form:";
 
@@ -19,14 +20,14 @@ pub async fn event_handler(ctx: &Context, event: &FullEvent, framework: Framewor
         if !custom_id.starts_with(CUSTOM_ID_PREFIX) {
             return Ok(());
         }
-        let form_id = custom_id[CUSTOM_ID_PREFIX.len()..].parse()?;
+        let form_ref = FormRef::new(*guild_id, custom_id[CUSTOM_ID_PREFIX.len()..].parse()?);
 
-        if let Some(cooldown) = framework.user_data.cooldown(*guild_id, form_id, interaction.user.id).await? {
+        if let Some(cooldown) = framework.user_data.cooldown(form_ref, interaction.user.id).await? {
             reply(ctx, interaction, format!("You have submitted this form recently; please wait {} before trying again", humantime::format_duration(cooldown))).await?;
             return Ok(());
         }
 
-        let Some(form) = framework.user_data.get_form(*guild_id, form_id).await? else {
+        let Some(form) = framework.user_data.get_form(form_ref).await? else {
             reply(ctx, interaction, "This form no longer exists").await?;
             return Ok(());
         };

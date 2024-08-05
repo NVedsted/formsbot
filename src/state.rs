@@ -45,6 +45,34 @@ impl poise::SlashArgument for FormId {
     }
 }
 
+#[derive(Copy, Clone)]
+pub struct FormRef {
+    pub guild_id: GuildId,
+    pub form_id: FormId,
+}
+
+impl FormRef {
+    pub fn new(guild_id: GuildId, form_id: FormId) -> Self {
+        FormRef { guild_id, form_id }
+    }
+}
+
+#[async_trait]
+impl poise::SlashArgument for FormRef {
+    async fn extract(ctx: &Context, interaction: &CommandInteraction, value: &ResolvedValue<'_>) -> std::result::Result<Self, SlashArgError> {
+        let form_id = FormId::extract(ctx, interaction, value).await?;
+        match interaction.guild_id {
+            Some(guild_id) => Ok(FormRef::new(guild_id, form_id)),
+            None => Err(SlashArgError::new_command_structure_mismatch("only possible in guilds")),
+        }
+    }
+
+    fn create(builder: CreateCommandOption) -> CreateCommandOption {
+        FormId::create(builder)
+    }
+}
+
+#[derive(Clone)]
 pub struct State {
     pub connection_manager: redis::aio::ConnectionManager,
 }
@@ -53,13 +81,13 @@ fn get_forms_key(guild_id: GuildId) -> String {
     format!("forms:{guild_id}")
 }
 
-fn get_cooldown_key(guild_id: GuildId, form_id: FormId, user_id: UserId) -> String {
+fn get_cooldown_key(FormRef { guild_id, form_id }: FormRef, user_id: UserId) -> String {
     format!("forms:{guild_id}:{form_id}:{user_id}")
 }
 
 impl State {
-    pub async fn get_form(&self, guild_id: GuildId, id: FormId) -> Result<Option<Form>, crate::Error> {
-        Ok(self.connection_manager.clone().hget(get_forms_key(guild_id), id.to_string()).await?)
+    pub async fn get_form(&self, form_ref: FormRef) -> Result<Option<Form>, crate::Error> {
+        Ok(self.connection_manager.clone().hget(get_forms_key(form_ref.guild_id), form_ref.form_id.to_string()).await?)
     }
 
     pub async fn save_form(&self, guild_id: GuildId, new_form: &Form) -> Result<(), crate::Error> {
@@ -75,12 +103,12 @@ impl State {
         Ok(forms.into_iter().map(|f| (f.id, f.title.clone())).collect())
     }
 
-    pub async fn get_fields(&self, guild_id: GuildId, id: FormId) -> Result<Option<Vec<FormField>>, crate::Error> {
-        Ok(self.get_form(guild_id, id).await?.map(|f| f.fields))
+    pub async fn get_fields(&self, form_ref: FormRef) -> Result<Option<Vec<FormField>>, crate::Error> {
+        Ok(self.get_form(form_ref).await?.map(|f| f.fields))
     }
 
-    pub async fn cooldown(&self, guild_id: GuildId, form_id: FormId, user_id: UserId) -> Result<Option<Duration>, crate::Error> {
-        let ttl: i64 = self.connection_manager.clone().ttl(get_cooldown_key(guild_id, form_id, user_id)).await?;
+    pub async fn cooldown(&self, form_ref: FormRef, user_id: UserId) -> Result<Option<Duration>, crate::Error> {
+        let ttl: i64 = self.connection_manager.clone().ttl(get_cooldown_key(form_ref, user_id)).await?;
         Ok(match ttl {
             ..=0 => None,
             s => Some(Duration::from_secs(s as u64))
@@ -93,14 +121,14 @@ impl State {
         };
 
         self.connection_manager.clone().set_options(
-            get_cooldown_key(guild_id, form.id, user_id), 1,
+            get_cooldown_key(FormRef::new(guild_id, form.id), user_id), 1,
             SetOptions::default().with_expiration(SetExpiry::EX(duration.as_secs())),
         ).await?;
         Ok(())
     }
 
-    pub async fn clear_cooldown(&self, guild_id: GuildId, form_id: FormId, user_id: UserId) -> Result<bool, crate::Error> {
-        Ok(self.connection_manager.clone().del(get_cooldown_key(guild_id, form_id, user_id)).await?)
+    pub async fn clear_cooldown(&self, form_ref: FormRef, user_id: UserId) -> Result<bool, crate::Error> {
+        Ok(self.connection_manager.clone().del(get_cooldown_key(form_ref, user_id)).await?)
     }
 }
 

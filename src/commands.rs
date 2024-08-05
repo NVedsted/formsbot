@@ -8,7 +8,7 @@ use crate::{ApplicationContext, Context, Error};
 use crate::errors::UserFriendlyError;
 use crate::event_handler::CUSTOM_ID_PREFIX;
 use crate::responses::create_response;
-use crate::state::{AddFieldError, Form, FormField, FormId, SerializableMention, State};
+use crate::state::{AddFieldError, Form, FormField, FormId, FormRef, SerializableMention, State};
 
 /// Manage forms in the server
 #[poise::command(
@@ -36,13 +36,13 @@ async fn clear_cooldown(
     #[description = "The form to clear cooldowns for"]
     #[rename = "form"]
     #[autocomplete = "autocomplete_form"]
-    form_id: FormId,
+    form_ref: FormRef,
     #[description = "The user to clear cooldown for"]
     #[rename = "user"]
     user_id: UserId,
 ) -> Result<(), Error> {
     ctx.defer_ephemeral().await?;
-    if ctx.data.clear_cooldown(ctx.guild_id().unwrap(), form_id, user_id).await? {
+    if ctx.data.clear_cooldown(form_ref, user_id).await? {
         ctx.say(format!("Cooldown was cleared for {}", user_id.mention())).await?;
     } else {
         ctx.say(format!("{} was not on cooldown for this form", user_id.mention())).await?;
@@ -50,8 +50,8 @@ async fn clear_cooldown(
     Ok(())
 }
 
-async fn get_form(ctx: ApplicationContext<'_>, form_id: FormId) -> Result<Form, Error> {
-    ctx.data.get_form(ctx.guild_id().unwrap(), form_id).await?.ok_or_else(|| UserFriendlyError::new("Form could not be found").into())
+async fn get_form(ctx: ApplicationContext<'_>, form_ref: FormRef) -> Result<Form, Error> {
+    ctx.data.get_form(form_ref).await?.ok_or_else(|| UserFriendlyError::new("Form could not be found").into())
 }
 
 /// Changes the destination channel of a form
@@ -61,13 +61,13 @@ async fn rename(
     #[description = "The form to modify"]
     #[rename = "form"]
     #[autocomplete = "autocomplete_form"]
-    form_id: FormId,
+    form_ref: FormRef,
     #[description = "New title for the form"]
     #[max_length = 45]
     title: String,
 ) -> Result<(), Error> {
     ctx.defer_ephemeral().await?;
-    let mut form = get_form(ctx, form_id).await?;
+    let mut form = get_form(ctx, form_ref).await?;
     form.set_title(title)?;
     ctx.data.save_form(ctx.guild_id().unwrap(), &form).await?;
     ctx.say("Form was renamed").await?;
@@ -81,13 +81,13 @@ async fn description(
     #[description = "The form to modify"]
     #[rename = "form"]
     #[autocomplete = "autocomplete_form"]
-    form_id: FormId,
+    form_ref: FormRef,
     #[description = "The new text to be shown shown in top of responses (leave it out to clear)"]
     #[max_length = 4096]
     description: Option<String>,
 ) -> Result<(), Error> {
     ctx.defer_ephemeral().await?;
-    let mut form = get_form(ctx, form_id).await?;
+    let mut form = get_form(ctx, form_ref).await?;
     form.set_description(description)?;
     ctx.data.save_form(ctx.guild_id().unwrap(), &form).await?;
     ctx.say("Form description was changed").await?;
@@ -101,12 +101,12 @@ async fn cooldown(
     #[description = "The form to modify"]
     #[rename = "form"]
     #[autocomplete = "autocomplete_form"]
-    form_id: FormId,
+    form_ref: FormRef,
     #[description = "The new duration users must wait between submissions (leave it out to clear)"]
     cooldown: Option<String>,
 ) -> Result<(), Error> {
     ctx.defer_ephemeral().await?;
-    let mut form = get_form(ctx, form_id).await?;
+    let mut form = get_form(ctx, form_ref).await?;
     form.set_cooldown(cooldown.map(parse_cooldown).transpose()?);
     ctx.data.save_form(ctx.guild_id().unwrap(), &form).await?;
     ctx.say("Form cooldown was changed").await?;
@@ -120,12 +120,12 @@ async fn mention(
     #[description = "The form to modify"]
     #[rename = "form"]
     #[autocomplete = "autocomplete_form"]
-    form_id: FormId,
+    form_ref: FormRef,
     #[description = "New role/user to be mentioned on submission (leave it out to remove)"]
     mention: Option<SerializableMention>,
 ) -> Result<(), Error> {
     ctx.defer_ephemeral().await?;
-    let mut form = get_form(ctx, form_id).await?;
+    let mut form = get_form(ctx, form_ref).await?;
     form.mention = mention;
     ctx.data.save_form(ctx.guild_id().unwrap(), &form).await?;
     ctx.say("Mention of the form was changed").await?;
@@ -147,12 +147,12 @@ async fn destination(
     #[description = "The form to modify"]
     #[rename = "form"]
     #[autocomplete = "autocomplete_form"]
-    form_id: FormId,
+    form_ref: FormRef,
     #[description = "The new channel to create the thread under"]
     #[channel_types("Text")]
     destination: GuildChannel,
 ) -> Result<(), Error> {
-    let mut form = get_form(ctx, form_id).await?;
+    let mut form = get_form(ctx, form_ref).await?;
 
     validate_destination(ctx, &destination)?;
 
@@ -232,11 +232,11 @@ async fn show_form(
     #[description = "The form to delete"]
     #[rename = "form"]
     #[autocomplete = "autocomplete_form"]
-    form_id: FormId,
+    form_ref: FormRef,
     #[description = "Whether submitting should create a response (defaults to false)"]
     create: Option<bool>,
 ) -> Result<(), Error> {
-    let form = get_form(ctx, form_id).await?;
+    let form = get_form(ctx, form_ref).await?;
     let Some(quick_modal) = form.quick_modal() else {
         ctx.say("A form must have fields to be shown.").await?;
         return Ok(());
@@ -262,10 +262,10 @@ async fn form_details(
     #[description = "The form to consider"]
     #[rename = "form"]
     #[autocomplete = "autocomplete_form"]
-    form_id: FormId,
+    form_ref: FormRef,
 ) -> Result<(), Error> {
     ctx.defer_ephemeral().await?;
-    let form = get_form(ctx, form_id).await?;
+    let form = get_form(ctx, form_ref).await?;
     let mut embed_builder = CreateEmbed::new()
         .title(form.title());
 
@@ -335,7 +335,7 @@ async fn add_field(
     #[description = "The form to consider"]
     #[rename = "form"]
     #[autocomplete = "autocomplete_form"]
-    form_id: FormId,
+    form_ref: FormRef,
     #[description = "The name of the field"]
     #[max_length = 45]
     name: String,
@@ -356,7 +356,7 @@ async fn add_field(
     add_before: Option<usize>,
     #[description = "Whether to inline the field when printing responses"] inline: Option<bool>,
 ) -> Result<(), Error> {
-    let mut form = get_form(ctx, form_id).await?;
+    let mut form = get_form(ctx, form_ref).await?;
     let mut field = FormField::new(name, style.into())?;
     field.min_length = min_length;
     field.max_length = max_length;
@@ -406,7 +406,7 @@ async fn autocomplete_field(
         return vec![];
     };
 
-    match ctx.data.get_fields(ctx.guild_id().unwrap(), form_id).await {
+    match ctx.data.get_fields(FormRef::new(ctx.guild_id().unwrap(), form_id)).await {
         Ok(Some(fields)) => {
             return fields.into_iter().enumerate().map(|(i, f)| AutocompleteChoice::new(f.name(), i)).collect();
         }
@@ -424,12 +424,12 @@ async fn remove_field(
     #[description = "The form to consider"]
     #[rename = "form"]
     #[autocomplete = "autocomplete_form"]
-    form_id: FormId,
+    form_ref: FormRef,
     #[description = "The field to remove"]
     #[autocomplete = "autocomplete_field"]
     field: usize,
 ) -> Result<(), Error> {
-    let mut form = get_form(ctx, form_id).await?;
+    let mut form = get_form(ctx, form_ref).await?;
     if form.remove_field(field) {
         ctx.say("Field was removed").await?;
         ctx.data.save_form(ctx.guild_id().unwrap(), &form).await?;
