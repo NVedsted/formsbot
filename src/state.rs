@@ -275,10 +275,22 @@ impl ToRedisArgs for Form {
     }
 }
 
+#[derive(Debug, Eq, PartialEq)]
 pub enum AddFieldError {
     TooManyFields,
     IllegalAddBefore,
 }
+
+impl Display for AddFieldError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AddFieldError::TooManyFields => write!(f, "too many fields"),
+            AddFieldError::IllegalAddBefore => write!(f, "illegal add-before target"),
+        }
+    }
+}
+
+impl std::error::Error for AddFieldError {}
 
 #[derive(Debug)]
 pub struct ValueTooLong;
@@ -342,6 +354,8 @@ impl Form {
         &self.fields
     }
 
+    pub fn fields_mut(&mut self) -> &mut [FormField] { self.fields.as_mut_slice() }
+
     pub fn quick_modal(&self) -> Option<CreateQuickModal> {
         if self.fields.is_empty() {
             return None;
@@ -385,11 +399,78 @@ impl Form {
         }
     }
 
+    pub fn move_field(&mut self, index: usize, destination: usize) -> Result<bool, AddFieldError> {
+        if index >= self.fields.len() {
+            return Ok(false);
+        }
+
+        if destination >= self.fields.len() {
+            return Err(AddFieldError::IllegalAddBefore);
+        }
+
+        let field = self.fields.remove(index);
+        self.add_field(field, Some(destination))?;
+
+        Ok(true)
+    }
+
     fn validate_title(title: &str) -> Result<(), ValueTooLong> {
         if title.len() > 256 {
             Err(ValueTooLong)
         } else {
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serenity::all::{ChannelId, InputTextStyle};
+    use crate::state::{AddFieldError, Form, FormField};
+
+    #[test]
+    fn move_backward() {
+        let mut form = create_form();
+        assert!(form.move_field(4, 0).unwrap());
+        assert_eq!(
+            form.fields().iter().map(|f| &f.name).collect::<Vec<_>>(),
+            ["Field 4", "Field 0", "Field 1", "Field 2", "Field 3"],
+        );
+    }
+
+    #[test]
+    fn move_forward() {
+        let mut form = create_form();
+        assert!(form.move_field(0, 4).unwrap());
+        assert_eq!(
+            form.fields().iter().map(|f| &f.name).collect::<Vec<_>>(),
+            ["Field 1", "Field 2", "Field 3", "Field 4", "Field 0"],
+        );
+    }
+
+    #[test]
+    fn move_same() {
+        let mut form = create_form();
+        assert!(form.move_field(2, 2).unwrap());
+        assert_eq!(
+            form.fields().iter().map(|f| &f.name).collect::<Vec<_>>(),
+            ["Field 0", "Field 1", "Field 2", "Field 3", "Field 4"],
+        );
+    }
+
+    #[test]
+    fn move_too_far() {
+        let mut form = create_form();
+        assert_eq!(form.move_field(0, 10), Err(AddFieldError::IllegalAddBefore));
+    }
+
+    fn create_form() -> Form {
+        let mut form = Form::new("My Title".to_owned(), ChannelId::new(123)).unwrap();
+        form.add_field(FormField::new("Field 0".to_owned(), InputTextStyle::Short).unwrap(), None).unwrap();
+        form.add_field(FormField::new("Field 1".to_owned(), InputTextStyle::Short).unwrap(), None).unwrap();
+        form.add_field(FormField::new("Field 2".to_owned(), InputTextStyle::Short).unwrap(), None).unwrap();
+        form.add_field(FormField::new("Field 3".to_owned(), InputTextStyle::Short).unwrap(), None).unwrap();
+        form.add_field(FormField::new("Field 4".to_owned(), InputTextStyle::Short).unwrap(), None).unwrap();
+        form
     }
 }
